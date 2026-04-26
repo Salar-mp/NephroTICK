@@ -38,6 +38,7 @@ try:
     from strip_detector import analyze_strip_auto, annotate_result
     from reference_calibrator import detect_reference_bands
     from dipstick_analyzer import PROTEIN_SCALE
+    from preprocessing import check_blur
     modules_ok = True
 except ImportError as e:
     modules_ok = False
@@ -147,13 +148,60 @@ with tab_upload:
         key="strip_upload", label_visibility="collapsed"
     )
     if strip_up:
-        strip_path = save_to_temp(strip_up, suffix=".jpg")
+        tmp_path = save_to_temp(strip_up, suffix=".jpg")
         st.image(strip_up, caption="Uploaded strip", use_container_width=True)
+        blurry, variance = check_blur(tmp_path)
+        if blurry:
+            st.warning(
+                f"⚠️ Image looks blurry (sharpness score: {variance:.0f} — aim for >80). "
+                "Results may be less accurate — consider retaking with better focus."
+            )
+        strip_path = tmp_path  # still allow analysis for uploads (user can't retake easily)
 
 with tab_camera:
+    # ── Framing guide ─────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:10px;
+                padding:12px 16px; margin-bottom:12px;">
+      <p style="margin:0 0 8px 0; font-weight:600; font-size:0.95rem;">
+        📐 Framing guide — hold the camera <strong>20–30 cm</strong> above the strip
+      </p>
+      <svg width="100%" viewBox="0 0 360 110" style="display:block;">
+        <!-- Background surface -->
+        <rect width="360" height="110" fill="#ffffff" rx="6" stroke="#dee2e6" stroke-width="1"/>
+        <!-- Target zone (strip should fill this area) -->
+        <rect x="60" y="12" width="240" height="86" fill="none"
+              stroke="#27ae60" stroke-width="2.5" stroke-dasharray="10,5" rx="4"/>
+        <!-- Corner brackets -->
+        <polyline points="60,30 60,12 80,12"   fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
+        <polyline points="280,12 300,12 300,30" fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
+        <polyline points="60,80 60,98 80,98"   fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
+        <polyline points="280,98 300,98 300,80" fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
+        <!-- Strip illustration -->
+        <rect x="130" y="28" width="100" height="54" fill="#f0ece0" rx="3" stroke="#bbb" stroke-width="1"/>
+        <rect x="168" y="38" width="24" height="24" fill="#a8c878" rx="2"/>
+        <!-- Labels -->
+        <text x="180" y="78" text-anchor="middle" fill="#888" font-size="9" font-family="Arial">strip</text>
+        <text x="180" y="107" text-anchor="middle" fill="#555" font-size="9" font-family="Arial">
+          Keep strip inside the green box · white background · flashlight on
+        </text>
+      </svg>
+    </div>
+    """, unsafe_allow_html=True)
+
     strip_cam = st.camera_input("Take a photo", key="strip_cam", label_visibility="collapsed")
     if strip_cam:
-        strip_path = save_to_temp(strip_cam, suffix=".jpg")
+        tmp_path = save_to_temp(strip_cam, suffix=".jpg")
+        # ── Blur check ────────────────────────────────────────────────────────
+        blurry, variance = check_blur(tmp_path)
+        if blurry:
+            st.warning(
+                f"⚠️ Image looks blurry (sharpness score: {variance:.0f} — aim for >80). "
+                "Hold the camera steady and tap the subject to focus, then retake."
+            )
+            # Don't set strip_path — forces the user to retake
+        else:
+            strip_path = tmp_path
 
 st.divider()
 

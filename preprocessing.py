@@ -136,6 +136,24 @@ def sample_white_body(
     return tuple(trimmed.mean(axis=0))  # (B, G, R)
 
 
+def check_blur(image_path: str, threshold: float = 80.0) -> Tuple[bool, float]:
+    """
+    Estimates image sharpness using the variance of the Laplacian.
+
+    A sharp image has many strong edges, producing a high Laplacian variance.
+    A blurry image (out of focus, hand-shake) has weak edges and a low variance.
+
+    Returns (is_blurry, variance). Variance below `threshold` is flagged as
+    blurry. Threshold of 80 is calibrated for Streamlit camera captures
+    (typically 640×480–1280×720). Increase for higher-resolution inputs.
+    """
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return False, 0.0
+    variance = float(cv2.Laplacian(img, cv2.CV_64F).var())
+    return variance < threshold, variance
+
+
 def apply_white_body_correction(
     rgb: Tuple[float, float, float],
     white_bgr: Tuple[float, float, float],
