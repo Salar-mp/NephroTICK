@@ -12,6 +12,7 @@ No settings to configure. Upload or photograph the strip and press Analyse.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import cv2
 import numpy as np
 import tempfile
@@ -159,37 +160,91 @@ with tab_upload:
         strip_path = tmp_path  # still allow analysis for uploads (user can't retake easily)
 
 with tab_camera:
-    # ── Framing guide ─────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:10px;
-                padding:12px 16px; margin-bottom:12px;">
-      <p style="margin:0 0 8px 0; font-weight:600; font-size:0.95rem;">
-        📐 Framing guide — hold the camera <strong>20–30 cm</strong> above the strip
-      </p>
-      <svg width="100%" viewBox="0 0 360 110" style="display:block;">
-        <!-- Background surface -->
-        <rect width="360" height="110" fill="#ffffff" rx="6" stroke="#dee2e6" stroke-width="1"/>
-        <!-- Target zone (strip should fill this area) -->
-        <rect x="60" y="12" width="240" height="86" fill="none"
-              stroke="#27ae60" stroke-width="2.5" stroke-dasharray="10,5" rx="4"/>
-        <!-- Corner brackets -->
-        <polyline points="60,30 60,12 80,12"   fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
-        <polyline points="280,12 300,12 300,30" fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
-        <polyline points="60,80 60,98 80,98"   fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
-        <polyline points="280,98 300,98 300,80" fill="none" stroke="#27ae60" stroke-width="3" stroke-linecap="round"/>
-        <!-- Strip illustration -->
-        <rect x="130" y="28" width="100" height="54" fill="#f0ece0" rx="3" stroke="#bbb" stroke-width="1"/>
-        <rect x="168" y="38" width="24" height="24" fill="#a8c878" rx="2"/>
-        <!-- Labels -->
-        <text x="180" y="78" text-anchor="middle" fill="#888" font-size="9" font-family="Arial">strip</text>
-        <text x="180" y="107" text-anchor="middle" fill="#555" font-size="9" font-family="Arial">
-          Keep strip inside the green box · white background · flashlight on
-        </text>
-      </svg>
-    </div>
-    """, unsafe_allow_html=True)
-
     strip_cam = st.camera_input("Take a photo", key="strip_cam", label_visibility="collapsed")
+
+    # ── ROI overlay injected onto the live camera video element ───────────────
+    components.html("""
+    <script>
+    (function () {
+      const MARGIN = 0.12;   // fraction of frame to leave as border
+      const CORNER = 0.08;   // corner bracket length as fraction of shorter side
+
+      function tryInject() {
+        try {
+          const doc   = window.parent.document;
+          const video = doc.querySelector('video');
+          if (!video) { setTimeout(tryInject, 300); return; }
+          if (doc.getElementById('nt-roi')) return;   // already injected
+
+          // Make sure the video wrapper is position:relative so we can anchor the canvas
+          const wrap = video.parentElement;
+          if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+
+          const cv = doc.createElement('canvas');
+          cv.id = 'nt-roi';
+          cv.style.cssText = [
+            'position:absolute', 'top:0', 'left:0',
+            'pointer-events:none', 'z-index:10',
+          ].join(';');
+          wrap.appendChild(cv);
+
+          function draw() {
+            const vw = video.offsetWidth, vh = video.offsetHeight;
+            if (!vw || !vh) { requestAnimationFrame(draw); return; }
+            if (cv.width !== vw || cv.height !== vh) { cv.width = vw; cv.height = vh; }
+
+            const ctx = cv.getContext('2d');
+            ctx.clearRect(0, 0, vw, vh);
+
+            const mx = vw * MARGIN, my = vh * MARGIN;
+            const rw = vw - 2 * mx, rh = vh - 2 * my;
+            const cs = Math.min(rw, rh) * CORNER;
+
+            // Dashed ROI rectangle
+            ctx.strokeStyle = 'rgba(39,210,90,0.80)';
+            ctx.lineWidth   = 2.5;
+            ctx.setLineDash([10, 5]);
+            ctx.strokeRect(mx, my, rw, rh);
+
+            // Solid corner brackets
+            ctx.setLineDash([]);
+            ctx.lineWidth   = 4;
+            ctx.strokeStyle = '#1ddd50';
+            ctx.lineCap     = 'round';
+            [
+              [mx,      my,      +cs,   0,   0,  +cs],   // top-left
+              [mx+rw,   my,      -cs,   0,   0,  +cs],   // top-right
+              [mx,      my+rh,   +cs,   0,   0,  -cs],   // bottom-left
+              [mx+rw,   my+rh,   -cs,   0,   0,  -cs],   // bottom-right
+            ].forEach(([x, y, dx1, dy1, dx2, dy2]) => {
+              ctx.beginPath();
+              ctx.moveTo(x + dx1, y + dy1);
+              ctx.lineTo(x, y);
+              ctx.lineTo(x + dx2, y + dy2);
+              ctx.stroke();
+            });
+
+            // Guide label above the box
+            const fs = Math.max(11, Math.round(vw * 0.033));
+            ctx.font         = `600 ${fs}px Arial, sans-serif`;
+            ctx.fillStyle    = 'rgba(20,210,70,0.92)';
+            ctx.textAlign    = 'center';
+            ctx.shadowColor  = 'rgba(0,0,0,0.55)';
+            ctx.shadowBlur   = 4;
+            ctx.fillText('Place strip here  ·  20–30 cm away', vw / 2, my - 8);
+            ctx.shadowBlur   = 0;
+
+            requestAnimationFrame(draw);
+          }
+          draw();
+        } catch (e) {
+          console.warn('NephroTICK ROI overlay:', e);
+        }
+      }
+      tryInject();
+    })();
+    </script>
+    """, height=0)
     if strip_cam:
         tmp_path = save_to_temp(strip_cam, suffix=".jpg")
         # ── Blur check ────────────────────────────────────────────────────────
