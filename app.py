@@ -166,27 +166,56 @@ with tab_camera:
     components.html("""
     <script>
     (function () {
-      const MARGIN = 0.12;   // fraction of frame to leave as border
-      const CORNER = 0.08;   // corner bracket length as fraction of shorter side
+      /*
+       * Two overlays:
+       *
+       * 1. PAD TARGET (inner solid box) — fixed physical size.
+       *    The Albustix protein pad is ~6 mm × 6 mm.
+       *    We measure the device's CSS pixel-per-mm ratio via a hidden div,
+       *    then scale so the box represents ~6 mm × 6 mm on screen.
+       *    At the correct distance (~20 cm), the green pad on the strip will
+       *    exactly fill this box. Move closer if it looks smaller; farther if larger.
+       *
+       * 2. STRIP GUIDE (outer dashed box) — 70 % × 55 % of frame.
+       *    Ensures the full strip (and reference colour chart) stays in frame.
+       */
+
+      // Physical size of the protein pad in mm
+      const PAD_MM = 6;
+
+      function getPxPerMm(doc) {
+        const el = doc.createElement('div');
+        el.style.cssText = 'width:10mm;height:1px;position:absolute;visibility:hidden;';
+        doc.body.appendChild(el);
+        const px = el.getBoundingClientRect().width / 10;
+        doc.body.removeChild(el);
+        return px > 0 ? px : 3.78;  // fallback: 96dpi → 3.78px/mm
+      }
+
+      function drawShadowText(ctx, text, x, y) {
+        ctx.shadowColor = 'rgba(0,0,0,0.65)';
+        ctx.shadowBlur  = 4;
+        ctx.fillText(text, x, y);
+        ctx.shadowBlur  = 0;
+      }
 
       function tryInject() {
         try {
           const doc   = window.parent.document;
           const video = doc.querySelector('video');
           if (!video) { setTimeout(tryInject, 300); return; }
-          if (doc.getElementById('nt-roi')) return;   // already injected
+          if (doc.getElementById('nt-roi')) return;
 
-          // Make sure the video wrapper is position:relative so we can anchor the canvas
           const wrap = video.parentElement;
           if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
 
           const cv = doc.createElement('canvas');
           cv.id = 'nt-roi';
-          cv.style.cssText = [
-            'position:absolute', 'top:0', 'left:0',
-            'pointer-events:none', 'z-index:10',
-          ].join(';');
+          cv.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:10;';
           wrap.appendChild(cv);
+
+          const pxPerMm = getPxPerMm(doc);
+          const PAD_PX  = PAD_MM * pxPerMm;   // physical pad size in CSS pixels
 
           function draw() {
             const vw = video.offsetWidth, vh = video.offsetHeight;
@@ -195,44 +224,78 @@ with tab_camera:
 
             const ctx = cv.getContext('2d');
             ctx.clearRect(0, 0, vw, vh);
+            ctx.lineCap = 'round';
 
-            const mx = vw * MARGIN, my = vh * MARGIN;
-            const rw = vw - 2 * mx, rh = vh - 2 * my;
-            const cs = Math.min(rw, rh) * CORNER;
-
-            // Dashed ROI rectangle
-            ctx.strokeStyle = 'rgba(39,210,90,0.80)';
-            ctx.lineWidth   = 2.5;
-            ctx.setLineDash([10, 5]);
-            ctx.strokeRect(mx, my, rw, rh);
-
-            // Solid corner brackets
+            // ── 1. Outer strip guide (dashed green) ──────────────────────────
+            const ox = vw * 0.15, oy = vh * 0.20;
+            const ow = vw * 0.70, oh = vh * 0.55;
+            ctx.strokeStyle = 'rgba(39,210,90,0.55)';
+            ctx.lineWidth   = 2;
+            ctx.setLineDash([8, 5]);
+            ctx.strokeRect(ox, oy, ow, oh);
             ctx.setLineDash([]);
-            ctx.lineWidth   = 4;
-            ctx.strokeStyle = '#1ddd50';
-            ctx.lineCap     = 'round';
-            [
-              [mx,      my,      +cs,   0,   0,  +cs],   // top-left
-              [mx+rw,   my,      -cs,   0,   0,  +cs],   // top-right
-              [mx,      my+rh,   +cs,   0,   0,  -cs],   // bottom-left
-              [mx+rw,   my+rh,   -cs,   0,   0,  -cs],   // bottom-right
-            ].forEach(([x, y, dx1, dy1, dx2, dy2]) => {
+
+            // Corner brackets on outer box
+            const cs = Math.min(ow, oh) * 0.10;
+            ctx.strokeStyle = 'rgba(39,210,90,0.75)';
+            ctx.lineWidth   = 3;
+            [[ox,ow+ox,oy,oh+oy]].forEach(([x0,x1,y0,y1]) => {
+              [[x0,y0,+cs,0,0,+cs],[x1,y0,-cs,0,0,+cs],
+               [x0,y1,+cs,0,0,-cs],[x1,y1,-cs,0,0,-cs]].forEach(([x,y,d1,_d2,d3,d4])=>{
+                ctx.beginPath();
+                ctx.moveTo(x+d1, y);
+                ctx.lineTo(x, y);
+                ctx.lineTo(x, y+d4);
+                ctx.stroke();
+              });
+            });
+
+            const fs = Math.max(10, Math.round(vw * 0.030));
+            ctx.font      = `500 ${fs}px Arial, sans-serif`;
+            ctx.fillStyle = 'rgba(39,210,90,0.80)';
+            ctx.textAlign = 'center';
+            drawShadowText(ctx, 'Keep full strip + reference chart inside', vw/2, oy - 6);
+
+            // ── 2. Inner pad target (solid white box, pad-sized) ─────────────
+            const px = (vw - PAD_PX) / 2;
+            const py = (vh - PAD_PX) / 2;
+
+            // Bright fill so the box stands out on any background
+            ctx.fillStyle = 'rgba(255,255,255,0.12)';
+            ctx.fillRect(px, py, PAD_PX, PAD_PX);
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth   = 2;
+            ctx.strokeRect(px, py, PAD_PX, PAD_PX);
+
+            // Coloured inner border
+            ctx.strokeStyle = '#ffdd00';
+            ctx.lineWidth   = 1.5;
+            const inset = 3;
+            ctx.strokeRect(px+inset, py+inset, PAD_PX-2*inset, PAD_PX-2*inset);
+
+            // Corner ticks on inner box
+            const tc = Math.min(PAD_PX * 0.35, 14);
+            ctx.strokeStyle = '#ffee44';
+            ctx.lineWidth   = 2.5;
+            [[px,py,+tc,0,0,+tc],[px+PAD_PX,py,-tc,0,0,+tc],
+             [px,py+PAD_PX,+tc,0,0,-tc],[px+PAD_PX,py+PAD_PX,-tc,0,0,-tc]]
+            .forEach(([x,y,dx,_,dz,dw])=>{
               ctx.beginPath();
-              ctx.moveTo(x + dx1, y + dy1);
-              ctx.lineTo(x, y);
-              ctx.lineTo(x + dx2, y + dy2);
+              ctx.moveTo(x+dx,y); ctx.lineTo(x,y); ctx.lineTo(x,y+dw);
               ctx.stroke();
             });
 
-            // Guide label above the box
-            const fs = Math.max(11, Math.round(vw * 0.033));
-            ctx.font         = `600 ${fs}px Arial, sans-serif`;
-            ctx.fillStyle    = 'rgba(20,210,70,0.92)';
-            ctx.textAlign    = 'center';
-            ctx.shadowColor  = 'rgba(0,0,0,0.55)';
-            ctx.shadowBlur   = 4;
-            ctx.fillText('Place strip here  ·  20–30 cm away', vw / 2, my - 8);
-            ctx.shadowBlur   = 0;
+            // Labels on inner box
+            const fsP = Math.max(9, Math.round(vw * 0.028));
+            ctx.font      = `700 ${fsP}px Arial, sans-serif`;
+            ctx.fillStyle = '#ffee44';
+            ctx.textAlign = 'center';
+            drawShadowText(ctx, 'Protein pad', vw/2, py - 6);
+
+            ctx.font      = `500 ${Math.max(8, fsP-1)}px Arial, sans-serif`;
+            ctx.fillStyle = 'rgba(255,238,100,0.85)';
+            drawShadowText(ctx, '← closer   farther →', vw/2, py + PAD_PX + fsP + 4);
 
             requestAnimationFrame(draw);
           }
